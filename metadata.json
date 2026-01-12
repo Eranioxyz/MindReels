@@ -1,0 +1,7 @@
+{
+  "name": "Copy of MindReels: Cognitive Snaps",
+  "description": "A vertical scrolling feed of cognitive challenges, mnemonic techniques, and real-world tidbits powered by Gemini. Exercise your brain with short, high-impact reels.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
