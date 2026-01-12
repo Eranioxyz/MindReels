@@ -13,6 +13,7 @@ export interface ReelContent {
   content: string;
   imagePrompt: string;
   imageUrl?: string;
+  audioBase64?: string; // Pre-generated speech data
   interaction?: {
     question?: string;
     options?: string[];

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ReelContent } from './types';
-import { fetchReels } from './services/geminiService';
+import { fetchReels, generateReelImage, generateSpeech } from './services/geminiService';
 import Header from './components/Header';
 import Reel from './components/Reel';
 import SavedItemsView from './components/SavedItemsView';
@@ -18,6 +18,9 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [activeIdx, setActiveIdx] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>('feed');
+  
+  // Track which reels are currently being processed to avoid duplicate calls
+  const processingIdsRef = useRef<Set<string>>(new Set());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -36,12 +39,54 @@ const App: React.FC = () => {
     } catch (err) {
       console.error("Failed to fetch reels", err);
       if (reels.length === 0) {
-        setError("Something went wrong while connecting to the AI. Please try again later.");
+        setError("Something went wrong while connecting to the AI.");
       }
     } finally {
       setLoading(false);
     }
   }, [reels.length]);
+
+  // The Preloading Queue Logic
+  useEffect(() => {
+    if (viewMode !== 'feed' || reels.length === 0) return;
+
+    const preloadNext = async () => {
+      // Look ahead: Process current and next 2 reels
+      const lookAheadCount = 3;
+      const range = reels.slice(activeIdx, activeIdx + lookAheadCount);
+
+      for (const reel of range) {
+        // Only process if not already processed and not currently processing
+        if (!reel.imageUrl && !processingIdsRef.current.has(reel.id)) {
+          processingIdsRef.current.add(reel.id);
+          
+          try {
+            // Generate Image and Speech in parallel for maximum speed
+            const textToSpeak = `${reel.title}. ${reel.content}`;
+            const [img, audio] = await Promise.all([
+              generateReelImage(reel.imagePrompt),
+              generateSpeech(textToSpeak)
+            ]);
+
+            setReels(currentReels => 
+              currentReels.map(r => 
+                r.id === reel.id 
+                  ? { ...r, imageUrl: img, audioBase64: audio } 
+                  : r
+              )
+            );
+          } catch (err) {
+            console.error(`Failed to preload assets for reel ${reel.id}`, err);
+          } finally {
+            // We keep it in the set to prevent retries of failed ones in the same session
+            // but the reel state update above is what matters for the UI
+          }
+        }
+      }
+    };
+
+    preloadNext();
+  }, [activeIdx, reels, viewMode]);
 
   useEffect(() => {
     loadMoreReels();
@@ -103,12 +148,7 @@ const App: React.FC = () => {
         <i className="fas fa-exclamation-triangle text-indigo-500 text-5xl mb-6"></i>
         <h1 className="text-2xl font-bold text-white mb-2">Oops!</h1>
         <p className="text-white/60 mb-8">{error}</p>
-        <button 
-          onClick={() => { setLoading(true); loadMoreReels(); }}
-          className="px-8 py-3 bg-indigo-600 text-white rounded-full font-bold hover:bg-indigo-500 transition-all"
-        >
-          Retry
-        </button>
+        <button onClick={() => { setLoading(true); loadMoreReels(); }} className="px-8 py-3 bg-indigo-600 text-white rounded-full font-bold hover:bg-indigo-500">Retry</button>
       </div>
     );
   }
@@ -149,19 +189,10 @@ const App: React.FC = () => {
           </div>
 
           <div className="absolute right-1 top-1/4 bottom-1/4 w-0.5 bg-white/10 z-40 rounded-full overflow-hidden">
-            <div 
-              className="w-full bg-indigo-500 scroll-progress-line shadow-[0_0_8px_rgba(99,102,241,0.8)]"
-              style={{ 
-                height: `${((activeIdx + 1) / Math.max(reels.length, 1)) * 100}%`
-              }}
-            />
+            <div className="w-full bg-indigo-500 scroll-progress-line shadow-[0_0_8px_rgba(99,102,241,0.8)]" style={{ height: `${((activeIdx + 1) / Math.max(reels.length, 1)) * 100}%` }} />
           </div>
 
-          <div 
-            ref={scrollContainerRef}
-            onScroll={handleScroll}
-            className="snap-container"
-          >
+          <div ref={scrollContainerRef} onScroll={handleScroll} className="snap-container">
             {reels.map((reel, idx) => (
               <Reel 
                 key={reel.id} 
@@ -171,7 +202,6 @@ const App: React.FC = () => {
                 onToggleSave={() => toggleSave(reel)}
               />
             ))}
-
             {loading && (
               <div className="snap-item flex items-center justify-center bg-black/50">
                 <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
@@ -180,21 +210,11 @@ const App: React.FC = () => {
           </div>
         </div>
       ) : (
-        <SavedItemsView 
-          savedReels={savedReels} 
-          onRemove={toggleSave}
-          onBack={() => setViewMode('feed')}
-        />
+        <SavedItemsView savedReels={savedReels} onRemove={toggleSave} onBack={() => setViewMode('feed')} />
       )}
 
       <nav className="fixed bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-black via-black/90 to-transparent z-50 flex justify-around items-center px-6 pointer-events-auto">
-        <button 
-          onClick={() => {
-            if (viewMode === 'feed') scrollToReel(0);
-            setViewMode('feed');
-          }}
-          className={`flex flex-col items-center transition-all duration-300 ${viewMode === 'feed' ? 'text-indigo-400 scale-110' : 'text-white/50 hover:text-white'}`}
-        >
+        <button onClick={() => { if (viewMode === 'feed') scrollToReel(0); setViewMode('feed'); }} className={`flex flex-col items-center transition-all duration-300 ${viewMode === 'feed' ? 'text-indigo-400 scale-110' : 'text-white/50 hover:text-white'}`}>
           <i className="fas fa-fire text-2xl"></i>
           <span className="text-[10px] mt-1 uppercase font-black tracking-tighter">Explore</span>
         </button>
@@ -205,10 +225,7 @@ const App: React.FC = () => {
         <button className="w-12 h-12 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-lg transform -translate-y-4 hover:scale-110 active:scale-95 transition-all shadow-indigo-500/40">
           <i className="fas fa-plus text-xl"></i>
         </button>
-        <button 
-          onClick={() => setViewMode('saved')}
-          className={`flex flex-col items-center transition-all duration-300 ${viewMode === 'saved' ? 'text-indigo-400 scale-110' : 'text-white/50 hover:text-white'}`}
-        >
+        <button onClick={() => setViewMode('saved')} className={`flex flex-col items-center transition-all duration-300 ${viewMode === 'saved' ? 'text-indigo-400 scale-110' : 'text-white/50 hover:text-white'}`}>
           <i className="fas fa-vault text-2xl"></i>
           <span className="text-[10px] mt-1 uppercase font-black tracking-tighter">Vault</span>
         </button>
